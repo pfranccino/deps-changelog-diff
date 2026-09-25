@@ -21,9 +21,17 @@ def make_client(
     """Return an Anthropic or AnthropicBedrock client."""
     if provider == "bedrock":
         from anthropic import AnthropicBedrock
-        kwargs: dict[str, Any] = {"timeout": timeout}
-        if aws_region:
-            kwargs["aws_region"] = aws_region
+        if not aws_region:
+            try:
+                import boto3
+                session = boto3.Session(profile_name=aws_profile)
+                aws_region = session.region_name
+            except Exception:
+                pass
+        kwargs: dict[str, Any] = {
+            "timeout": timeout,
+            "aws_region": aws_region or "us-east-1",
+        }
         if aws_profile:
             kwargs["aws_profile"] = aws_profile
         return AnthropicBedrock(**kwargs)
