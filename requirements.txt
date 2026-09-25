@@ -1,0 +1,2 @@
+# Dependencias del segundo proceso (changelog-diff.py).
+requests>=2.31.0

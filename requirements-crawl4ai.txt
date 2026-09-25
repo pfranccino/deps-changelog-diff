@@ -1,0 +1,7 @@
+# Opcional: crawl4AI para el camino principal de AndroidX y del fallback genérico.
+# Arrastra Playwright + un navegador headless. Instalar con:
+#   WITH_CRAWL4AI=1 ./check-changelog.sh
+# o manualmente:
+#   pip install -r requirements-crawl4ai.txt
+#   python -m playwright install chromium
+crawl4ai>=0.4.0

@@ -1,0 +1,33 @@
+# Entorno virtual Python
+venv-changelog/
+venv/
+env/
+ENV/
+
+# Caché de changelogs (por coordenada+versión)
+.changelog-cache/
+
+# Archivos de salida generados
+changelog_diff.json
+changelog.md
+
+# Navegador de Playwright (crawl4AI), por si se instala local
+.crawl4ai/
+
+# Temporales Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribución / empaquetado
+.Python
+build/
+dist/
+develop-eggs/
+*.egg-info/
+
+# Editores / OS
+.idea/
+.vscode/
+.DS_Store
