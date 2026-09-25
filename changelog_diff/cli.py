@@ -15,7 +15,7 @@ from .adapters import SourceRouter
 from .cache import Cache
 from .http import Fetcher
 from .intel import build_intel_document, compare_intel
-from .llm import summarize_with_llm
+from .llm import make_client, summarize_with_llm
 from .models import Dependency, load_dependencies
 from .render import render_markdown, render_intel_markdown
 
@@ -23,7 +23,7 @@ from .render import render_markdown, render_intel_markdown
 def process_dependency(
     dep: Dependency, fetcher: Fetcher, router: SourceRouter,
     cache: Cache, include_prereleases: bool,
-    summarize: bool, model: str, api_key: str | None,
+    summarize: bool, model: str, client: Any = None,
 ) -> dict[str, Any]:
     cached = cache.get(dep)
     if cached is not None:
@@ -44,7 +44,7 @@ def process_dependency(
         }
         cache.put(dep, result)
 
-    if (summarize and api_key and result.get("versions")
+    if (summarize and client is not None and result.get("versions")
             and "summary" not in result):
         combined = "\n\n".join(
             f"# {n['version']} ({n.get('date') or 's/f'})\n{n['notes']}"
@@ -52,7 +52,7 @@ def process_dependency(
         )
         summary = summarize_with_llm(
             dep.coordinate, dep.version_used, dep.latest_stable,
-            combined, model, api_key,
+            combined, model, client,
         )
         if summary:
             result["summary"] = summary
@@ -93,7 +93,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--summarize", action="store_true",
-        help="Enrich with LLM (requires --api-key or ANTHROPIC_API_KEY).",
+        help="Enrich with LLM (requires --api-key or --provider bedrock).",
     )
     parser.add_argument(
         "--summarize-scope", choices=("major", "all"), default="major",
@@ -113,9 +113,29 @@ def main() -> int:
         help="Anthropic API key (or ANTHROPIC_API_KEY env var).",
     )
     parser.add_argument(
+        "--provider",
+        choices=("anthropic", "bedrock"),
+        default=os.environ.get("LLM_PROVIDER", "anthropic"),
+        help="LLM provider: 'anthropic' (direct API) or 'bedrock' "
+             "(AWS Bedrock). Env var: LLM_PROVIDER.",
+    )
+    parser.add_argument(
+        "--aws-region",
+        default=os.environ.get("AWS_REGION"),
+        help="AWS region for Bedrock (or AWS_REGION env var).",
+    )
+    parser.add_argument(
+        "--aws-profile",
+        default=os.environ.get("AWS_PROFILE"),
+        help="AWS profile for Bedrock credentials (or AWS_PROFILE env var).",
+    )
+    parser.add_argument(
         "--model",
-        default=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
-        help="Model for summaries (or ANTHROPIC_MODEL env var).",
+        default=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        help="Model for summaries (or ANTHROPIC_MODEL env var). "
+             "Default: claude-haiku-4-5-20251001. "
+             "For Bedrock use the full model ID, e.g. "
+             "us.anthropic.claude-haiku-4-5-20251001-v1:0.",
     )
     parser.add_argument(
         "--cache-dir", default=".changelog-cache",
@@ -194,8 +214,18 @@ def main() -> int:
         return 0
 
     api_key = args.api_key
-    if args.summarize and not api_key:
-        log("   ⚠️  --summarize requested but no API key provided. Use --api-key or ANTHROPIC_API_KEY.")
+    client = None
+    if args.summarize or args.compare:
+        if args.provider == "anthropic" and not api_key:
+            log("   ⚠️  --summarize requested but no API key provided. "
+                "Use --api-key or ANTHROPIC_API_KEY.")
+        else:
+            client = make_client(
+                provider=args.provider,
+                api_key=api_key,
+                aws_region=args.aws_region,
+                aws_profile=args.aws_profile,
+            )
 
     cache_dir = (
         None if args.cache_dir.lower() in ("", "none") else args.cache_dir
@@ -218,6 +248,7 @@ def main() -> int:
     only = [c.strip() for c in args.summarize_only.split(",") if c.strip()]
     summary_in_fetch = (
         args.format == "raw" and args.summarize and not args.compare
+        and client is not None
     )
 
     log(f"🚀 Analyzing {len(deps)} dependencies...")
@@ -230,7 +261,7 @@ def main() -> int:
             pool.submit(
                 process_dependency, dep, fetcher, router, cache,
                 args.include_prereleases, summary_in_fetch,
-                args.model, api_key,
+                args.model, client,
             ): dep
             for dep in deps
         }
@@ -258,16 +289,16 @@ def main() -> int:
         heur = build_intel_document(
             deps_by_coord, results, summarize=False,
             scope=args.summarize_scope, only=only,
-            model=args.model, api_key=api_key,
+            model=args.model, client=client,
         )
         _write(f"{base}.heuristic.json", heur)
-        if not api_key:
-            log("⚠️  --compare without ANTHROPIC_API_KEY: heuristic only.")
+        if client is None:
+            log("⚠️  --compare without LLM credentials: heuristic only.")
             return 0
         llm = build_intel_document(
             deps_by_coord, results, summarize=True,
             scope=args.summarize_scope, only=only,
-            model=args.model, api_key=api_key,
+            model=args.model, client=client,
         )
         _write(f"{base}.llm.json", llm)
         delta = compare_intel(heur, llm)
@@ -285,7 +316,7 @@ def main() -> int:
         doc = build_intel_document(
             deps_by_coord, results, summarize=args.summarize,
             scope=args.summarize_scope, only=only,
-            model=args.model, api_key=api_key,
+            model=args.model, client=client,
         )
         _write(args.output, doc)
         if args.md:

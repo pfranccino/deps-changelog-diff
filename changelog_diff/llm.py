@@ -9,6 +9,27 @@ from pydantic import BaseModel
 from . import log
 
 
+# ---- Client factory ----------------------------------------------------------
+
+def make_client(
+    provider: str = "anthropic",
+    api_key: str | None = None,
+    aws_region: str | None = None,
+    aws_profile: str | None = None,
+    timeout: int = 60,
+) -> anthropic.Anthropic:
+    """Return an Anthropic or AnthropicBedrock client."""
+    if provider == "bedrock":
+        from anthropic import AnthropicBedrock
+        kwargs: dict[str, Any] = {"timeout": timeout}
+        if aws_region:
+            kwargs["aws_region"] = aws_region
+        if aws_profile:
+            kwargs["aws_profile"] = aws_profile
+        return AnthropicBedrock(**kwargs)
+    return anthropic.Anthropic(api_key=api_key, timeout=timeout)
+
+
 # ---- Structured output schemas -----------------------------------------------
 
 class SummaryResult(BaseModel):
@@ -82,9 +103,8 @@ Notes:
 
 def summarize_with_llm(
     coordinate: str, from_v: str, to_v: str, notes: str,
-    model: str, api_key: str, timeout: int = 60,
+    model: str, client: anthropic.Anthropic,
 ) -> dict[str, Any] | None:
-    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
     try:
         response = client.messages.parse(
             model=model,
@@ -109,9 +129,8 @@ def summarize_with_llm(
 
 def enrich_intel_with_llm(
     coordinate: str, from_v: str, to_v: str, notes: str,
-    model: str, api_key: str, timeout: int = 60,
+    model: str, client: anthropic.Anthropic,
 ) -> dict | None:
-    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
     try:
         response = client.messages.parse(
             model=model,

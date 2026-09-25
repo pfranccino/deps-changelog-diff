@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 # El archivo tiene guion, no es importable por nombre: lo cargamos por ruta.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -584,7 +584,7 @@ class TestFixPlanRegressions(unittest.TestCase):
     # 4.2 — Empty output with --format intel
     def test_build_intel_document_empty(self):
         doc = cd.build_intel_document({}, [], summarize=False, scope="major",
-                                      only=[], model="x", api_key=None)
+                                      only=[], model="x", client=None)
         self.assertEqual(doc["schema"], "deps-changelog-diff/change-intel-1")
         self.assertEqual(doc["meta"]["totals"]["analyzed"], 0)
         md = cd.render_intel_markdown(doc)
@@ -633,8 +633,7 @@ class TestLLMIntegration(unittest.TestCase):
         resp.parsed_output = parsed_output
         return resp
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_summarize_returns_valid_dict(self, MockAnthropic):
+    def test_summarize_returns_valid_dict(self):
         from changelog_diff.llm import summarize_with_llm, SummaryResult
 
         fake_result = SummaryResult(
@@ -646,13 +645,13 @@ class TestLLMIntegration(unittest.TestCase):
             migration_notes="Replace setFoo() with configure(). Update Bar usages.",
             tldr="Breaking removal of setFoo(), new Baz API added.",
         )
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(fake_result)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(fake_result)
 
         result = summarize_with_llm(
             "com.example:lib", "1.0.0", "2.0.0",
             "## 2.0.0\n- Removed setFoo()\n- Deprecated Bar\n- Added Baz",
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
 
         self.assertIsNotNone(result)
@@ -662,12 +661,11 @@ class TestLLMIntegration(unittest.TestCase):
         self.assertIsInstance(result["security_fixes"], list)
         self.assertEqual(len(result["security_fixes"]), 0)
 
-        call_kwargs = client.messages.parse.call_args.kwargs
+        call_kwargs = mock_client.messages.parse.call_args.kwargs
         self.assertEqual(call_kwargs["output_format"], SummaryResult)
         self.assertIn("com.example:lib", call_kwargs["messages"][0]["content"])
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_enrich_intel_returns_valid_dict(self, MockAnthropic):
+    def test_enrich_intel_returns_valid_dict(self):
         from changelog_diff.llm import enrich_intel_with_llm, IntelResult, Change, Seeds
 
         fake_result = IntelResult(
@@ -690,13 +688,13 @@ class TestLLMIntegration(unittest.TestCase):
             seeds=Seeds(packages=["com.example.lib"], types=["Bar"], functions=["setFoo"]),
             effort="medium",
         )
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(fake_result)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(fake_result)
 
         result = enrich_intel_with_llm(
             "com.example:lib", "1.0.0", "2.0.0",
             "## 2.0.0\n- Removed setFoo()\n- Deprecated Bar, use Baz",
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
 
         self.assertIsNotNone(result)
@@ -707,37 +705,34 @@ class TestLLMIntegration(unittest.TestCase):
         self.assertEqual(result["seeds"]["types"], ["Bar"])
         self.assertEqual(result["effort"], "medium")
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_api_error_returns_none(self, MockAnthropic):
+    def test_api_error_returns_none(self):
         from changelog_diff.llm import summarize_with_llm
         import anthropic
 
-        client = MockAnthropic.return_value
-        client.messages.parse.side_effect = anthropic.APIError(
+        mock_client = MagicMock()
+        mock_client.messages.parse.side_effect = anthropic.APIError(
             message="Unauthorized", request=MagicMock(), body=None,
         )
 
         result = summarize_with_llm(
             "com.example:lib", "1.0.0", "2.0.0", "notes",
-            "claude-sonnet-5", "bad-key",
+            "claude-sonnet-5", mock_client,
         )
         self.assertIsNone(result)
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_none_parsed_output_returns_none(self, MockAnthropic):
+    def test_none_parsed_output_returns_none(self):
         from changelog_diff.llm import enrich_intel_with_llm
 
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(None)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(None)
 
         result = enrich_intel_with_llm(
             "com.example:lib", "1.0.0", "2.0.0", "notes",
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
         self.assertIsNone(result)
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_enrich_result_compatible_with_apply_enrichment(self, MockAnthropic):
+    def test_enrich_result_compatible_with_apply_enrichment(self):
         """Verify the dict shape from enrich_intel_with_llm works with _apply_enrichment."""
         from changelog_diff.llm import enrich_intel_with_llm, IntelResult, Change, Seeds
 
@@ -754,12 +749,12 @@ class TestLLMIntegration(unittest.TestCase):
             seeds=Seeds(packages=["com.example"], types=["OldApi"], functions=[]),
             effort="high",
         )
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(fake_result)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(fake_result)
 
         enr = enrich_intel_with_llm(
             "com.example:lib", "2.0.0", "3.0.0", "notes",
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
 
         entry = {
@@ -805,8 +800,7 @@ class TestLLMIntegration(unittest.TestCase):
                 tldr="",
             )
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_prompt_includes_dependency_info(self, MockAnthropic):
+    def test_prompt_includes_dependency_info(self):
         from changelog_diff.llm import summarize_with_llm, SummaryResult
 
         fake_result = SummaryResult(
@@ -814,23 +808,22 @@ class TestLLMIntegration(unittest.TestCase):
             security_fixes=[], migration_effort="low",
             migration_notes="Nothing to do.", tldr="Patch release.",
         )
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(fake_result)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(fake_result)
 
         summarize_with_llm(
             "androidx.core:core", "1.9.0", "1.12.0",
             "Bug fixes and improvements",
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
 
-        content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+        content = mock_client.messages.parse.call_args.kwargs["messages"][0]["content"]
         self.assertIn("androidx.core:core", content)
         self.assertIn("1.9.0", content)
         self.assertIn("1.12.0", content)
         self.assertIn("Bug fixes and improvements", content)
 
-    @patch("changelog_diff.llm.anthropic.Anthropic")
-    def test_notes_truncated_at_60k_chars(self, MockAnthropic):
+    def test_notes_truncated_at_60k_chars(self):
         from changelog_diff.llm import summarize_with_llm, SummaryResult
 
         fake_result = SummaryResult(
@@ -838,16 +831,16 @@ class TestLLMIntegration(unittest.TestCase):
             security_fixes=[], migration_effort="low",
             migration_notes="", tldr="",
         )
-        client = MockAnthropic.return_value
-        client.messages.parse.return_value = self._make_mock_response(fake_result)
+        mock_client = MagicMock()
+        mock_client.messages.parse.return_value = self._make_mock_response(fake_result)
 
         huge_notes = "Z" * 100000
         summarize_with_llm(
             "com.test:lib", "1.0.0", "2.0.0", huge_notes,
-            "claude-sonnet-5", "fake-key",
+            "claude-sonnet-5", mock_client,
         )
 
-        content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+        content = mock_client.messages.parse.call_args.kwargs["messages"][0]["content"]
         z_count = content.count("Z")
         self.assertEqual(z_count, 60000)
 

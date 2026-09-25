@@ -312,7 +312,7 @@ def _select_targets(
 def build_intel_document(
     deps_by_coord: dict[str, Dependency], results: list[dict], *,
     summarize: bool, scope: str, only: list[str],
-    model: str, api_key: str | None,
+    model: str, client: Any = None,
 ) -> dict:
     intel: dict[str, dict] = {}
     for r in results:
@@ -321,7 +321,7 @@ def build_intel_document(
             intel[r["coordinate"]] = build_intel_entry(dep, r)
     enrichment = "heuristic"
 
-    if summarize and api_key:
+    if summarize and client is not None:
         targets = _select_targets(intel, scope, only)
         groups: dict[tuple, list[str]] = {}
         for coord in targets:
@@ -338,7 +338,7 @@ def build_intel_document(
                 coords[0], intel[coords[0]]["from"],
                 intel[coords[0]]["to"],
                 _combined_notes(intel[coords[0]]),
-                model, api_key,
+                model, client,
             )
             if enr:
                 for c in coords:

@@ -91,9 +91,12 @@ All tokens can be passed as **CLI arguments** or **environment variables**:
 
 | Parameter | CLI argument | Environment variable | Purpose |
 |---|---|---|---|
-| Anthropic API key | `--api-key sk-ant-...` | `ANTHROPIC_API_KEY` | Required for `--summarize` (LLM enrichment) |
+| Anthropic API key | `--api-key sk-ant-...` | `ANTHROPIC_API_KEY` | Required for `--summarize` (direct Anthropic API) |
+| LLM provider | `--provider anthropic\|bedrock` | `LLM_PROVIDER` | `anthropic` (default) or `bedrock` (AWS) |
+| AWS region | `--aws-region us-east-1` | `AWS_REGION` | Region for Bedrock (optional, defaults to SDK config) |
+| AWS profile | `--aws-profile default` | `AWS_PROFILE` | AWS credentials profile for Bedrock (optional) |
 | GitHub token | `--github-token ghp_...` | `GITHUB_TOKEN` | Increases GitHub API rate limit (60 → 5000 req/h) |
-| LLM model | `--model claude-sonnet-5` | `ANTHROPIC_MODEL` | Model for summaries (default: `claude-sonnet-5`) |
+| LLM model | `--model claude-haiku-4-5-20251001` | `ANTHROPIC_MODEL` | Model for summaries (default: `claude-haiku-4-5-20251001`) |
 
 > **Use a GitHub token.** Without one, the API gives ~60 requests/hour, and with dozens of
 > dependencies you'll exhaust it quickly (you'll see empty notes from rate limiting). A
@@ -117,6 +120,29 @@ python changelog-diff.py dependency_status.json --summarize --md changelog.md
 # Mix both — CLI takes precedence
 export GITHUB_TOKEN=ghp_DEFAULT_TOKEN
 python changelog-diff.py dependency_status.json --api-key sk-ant-YOUR_KEY --summarize
+```
+
+**Using AWS Bedrock instead of direct Anthropic API:**
+
+```bash
+# Install the Bedrock extra
+pip install anthropic[bedrock]
+
+# Uses default AWS credentials (env vars, ~/.aws/credentials, IAM role, etc.)
+python changelog-diff.py dependency_status.json --summarize \
+  --provider bedrock \
+  --model us.anthropic.claude-haiku-4-5-20251001-v1:0
+
+# Specify region and profile
+python changelog-diff.py dependency_status.json --summarize \
+  --provider bedrock --aws-region us-west-2 --aws-profile my-profile \
+  --model us.anthropic.claude-haiku-4-5-20251001-v1:0
+
+# Or use environment variables
+export LLM_PROVIDER=bedrock
+export AWS_REGION=us-east-1
+export ANTHROPIC_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+python changelog-diff.py dependency_status.json --summarize
 ```
 
 ## Output
@@ -220,8 +246,11 @@ Changelogs are immutable per version, so they're cached by
 | Flag | Purpose |
 |---|---|
 | `--format raw\|intel` | `raw` = raw notes (default). `intel` = change-intel-1 schema. |
-| `--summarize` | Enrich with LLM (requires `--api-key` or `ANTHROPIC_API_KEY`). |
+| `--summarize` | Enrich with LLM (requires API key or Bedrock credentials). |
 | `--api-key` | Anthropic API key for LLM enrichment (or `ANTHROPIC_API_KEY` env var). |
+| `--provider` | `anthropic` (default) or `bedrock` (AWS). Or `LLM_PROVIDER` env var. |
+| `--aws-region` | AWS region for Bedrock (or `AWS_REGION` env var). |
+| `--aws-profile` | AWS credentials profile for Bedrock (or `AWS_PROFILE` env var). |
 | `--summarize-scope major\|all` | Which deps the LLM applies to in `intel` (default: majors only). |
 | `--summarize-only "a,b"` | Comma-separated coordinates to enrich (ignores scope). |
 | `--compare` | Run heuristic vs LLM (intel) and report the delta. |
