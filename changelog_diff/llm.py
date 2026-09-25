@@ -39,19 +39,6 @@ def _load_claude_env() -> dict[str, str]:
     return env
 
 
-def _resolve(cli_val: str | None, *env_keys: str,
-             env: dict[str, str] | None = None) -> str | None:
-    """Return cli_val if set, else first matching env key, else None."""
-    if cli_val:
-        return cli_val
-    for key in env_keys:
-        val = os.environ.get(key)
-        if val:
-            return val
-        if env and env.get(key):
-            return env[key]
-    return None
-
 
 def make_client(
     provider: str = "anthropic",
@@ -65,38 +52,28 @@ def make_client(
         from anthropic import AnthropicBedrock
         claude_env = _load_claude_env()
 
-        bearer = _resolve(None, "AWS_BEARER_TOKEN_BEDROCK", env=claude_env)
-        aws_region = _resolve(aws_region, "AWS_REGION",
-                              "AWS_DEFAULT_REGION", env=claude_env)
-        aws_profile = _resolve(aws_profile, "AWS_PROFILE", env=claude_env)
-        aws_access_key = _resolve(None, "AWS_ACCESS_KEY_ID", env=claude_env)
-        aws_secret_key = _resolve(None, "AWS_SECRET_ACCESS_KEY", env=claude_env)
-        aws_session_token = _resolve(None, "AWS_SESSION_TOKEN", env=claude_env)
+        for key, val in claude_env.items():
+            if key not in os.environ:
+                os.environ[key] = val
 
+        aws_region = (
+            aws_region
+            or os.environ.get("AWS_REGION")
+            or os.environ.get("AWS_DEFAULT_REGION")
+        )
         if not aws_region:
             try:
                 import boto3
-                session = boto3.Session(profile_name=aws_profile)
+                profile = aws_profile or os.environ.get("AWS_PROFILE")
+                session = boto3.Session(profile_name=profile)
                 aws_region = session.region_name
             except Exception:
                 pass
 
-        kwargs: dict[str, Any] = {
-            "timeout": timeout,
-            "aws_region": aws_region or "us-east-1",
-        }
-        if bearer:
-            kwargs["api_key"] = bearer
-        else:
-            if aws_profile:
-                kwargs["aws_profile"] = aws_profile
-            if aws_access_key:
-                kwargs["aws_access_key"] = aws_access_key
-            if aws_secret_key:
-                kwargs["aws_secret_key"] = aws_secret_key
-            if aws_session_token:
-                kwargs["aws_session_token"] = aws_session_token
-        return AnthropicBedrock(**kwargs)
+        return AnthropicBedrock(
+            aws_region=aws_region or "us-east-1",
+            timeout=timeout,
+        )
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
 
