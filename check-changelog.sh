@@ -12,6 +12,7 @@
 #   ./check-changelog.sh --summarize --api-key sk-ant-...    # LLM enrichment with API key
 #   ./check-changelog.sh --github-token ghp_...              # pass GitHub token as argument
 #   WITH_CRAWL4AI=1 ./check-changelog.sh                     # install crawl4AI (fallback)
+#   WITH_BEDROCK=1 ./check-changelog.sh --summarize --provider bedrock  # AWS Bedrock support
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv-changelog"
@@ -67,6 +68,14 @@ if [ "${WITH_CRAWL4AI:-0}" = "1" ]; then
     "${VENV_PYTHON}" -m playwright install chromium >/dev/null 2>&1 || \
       echo "⚠️  Could not download Playwright browser; AndroidX will use the plain HTML fallback."
   fi
+fi
+
+# Bedrock is optional: only installed if you set WITH_BEDROCK=1.
+# It pulls in boto3 and AWS SDK dependencies.
+if [ "${WITH_BEDROCK:-0}" = "1" ]; then
+  echo "📦 Installing Bedrock support (requested via WITH_BEDROCK=1)..."
+  "${VENV_PYTHON}" -m pip install --quiet "anthropic[bedrock]>=0.40.0" || \
+    echo "⚠️  Could not install Bedrock dependencies; use --provider anthropic instead."
 fi
 
 echo "🔎 Analyzing changes between versions..."
