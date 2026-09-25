@@ -129,21 +129,27 @@ python changelog-diff.py dependency_status.json --api-key sk-ant-YOUR_KEY --summ
 pip install anthropic[bedrock]
 
 # Uses default AWS credentials (env vars, ~/.aws/credentials, IAM role, etc.)
-python changelog-diff.py dependency_status.json --summarize \
-  --provider bedrock \
-  --model us.anthropic.claude-haiku-4-5-20251001-v1:0
+python changelog-diff.py dependency_status.json --summarize --provider bedrock
 
 # Specify region and profile
 python changelog-diff.py dependency_status.json --summarize \
-  --provider bedrock --aws-region us-west-2 --aws-profile my-profile \
-  --model us.anthropic.claude-haiku-4-5-20251001-v1:0
+  --provider bedrock --aws-region us-west-2 --aws-profile my-profile
 
 # Or use environment variables
 export LLM_PROVIDER=bedrock
 export AWS_REGION=us-east-1
-export ANTHROPIC_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
 python changelog-diff.py dependency_status.json --summarize
 ```
+
+**Credential resolution for Bedrock** (checked in order):
+
+1. CLI arguments (`--aws-region`, `--aws-profile`)
+2. Standard environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, etc.)
+3. Claude Code settings (`~/.claude/settings.json` → `env` block, as configured by `/setup-bedrock`)
+4. boto3 default credential chain (`~/.aws/credentials`, IAM role, etc.)
+
+If your Claude Code settings use a **Bedrock API key** (`AWS_BEARER_TOKEN_BEDROCK`), it is picked up automatically.
+Model names are auto-mapped to Bedrock format (e.g. `claude-haiku-4-5-20251001` → `us.anthropic.claude-haiku-4-5-20251001-v1:0`).
 
 ## Output
 
@@ -256,7 +262,7 @@ Changelogs are immutable per version, so they're cached by
 | `--compare` | Run heuristic vs LLM (intel) and report the delta. |
 | `--all` | Analyze all deps, not just outdated ones. |
 | `--include-prereleases` | Include intermediate alphas/betas/rc (default: stables only). |
-| `--model` | LLM model (or `ANTHROPIC_MODEL` env var). Default: `claude-sonnet-5`. |
+| `--model` | LLM model (or `ANTHROPIC_MODEL` env var). Default: `claude-haiku-4-5-20251001`. |
 | `--github-token` | GitHub token for rate limiting (or `GITHUB_TOKEN` env var). |
 | `--androidx-lang` | AndroidX language via `?hl=` param (default: `es-419`; `en` = English). |
 | `--no-crawl4ai` | Don't use crawl4AI (avoids Playwright; AndroidX uses HTML parsing). |

@@ -65,6 +65,7 @@ def make_client(
         from anthropic import AnthropicBedrock
         claude_env = _load_claude_env()
 
+        bearer = _resolve(None, "AWS_BEARER_TOKEN_BEDROCK", env=claude_env)
         aws_region = _resolve(aws_region, "AWS_REGION",
                               "AWS_DEFAULT_REGION", env=claude_env)
         aws_profile = _resolve(aws_profile, "AWS_PROFILE", env=claude_env)
@@ -84,14 +85,17 @@ def make_client(
             "timeout": timeout,
             "aws_region": aws_region or "us-east-1",
         }
-        if aws_profile:
-            kwargs["aws_profile"] = aws_profile
-        if aws_access_key:
-            kwargs["aws_access_key"] = aws_access_key
-        if aws_secret_key:
-            kwargs["aws_secret_key"] = aws_secret_key
-        if aws_session_token:
-            kwargs["aws_session_token"] = aws_session_token
+        if bearer:
+            kwargs["api_key"] = bearer
+        else:
+            if aws_profile:
+                kwargs["aws_profile"] = aws_profile
+            if aws_access_key:
+                kwargs["aws_access_key"] = aws_access_key
+            if aws_secret_key:
+                kwargs["aws_secret_key"] = aws_secret_key
+            if aws_session_token:
+                kwargs["aws_session_token"] = aws_session_token
         return AnthropicBedrock(**kwargs)
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
