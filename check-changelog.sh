@@ -80,7 +80,7 @@ for arg in "$@"; do
 done
 if [ "${NEEDS_BEDROCK}" = "1" ]; then
   echo "📦 Installing Bedrock support (boto3 + AWS SDK)..."
-  "${VENV_PYTHON}" -m pip install --quiet "anthropic[bedrock]>=0.40.0" || \
+  "${VENV_PYTHON}" -m pip install --quiet "anthropic[bedrock]>=0.40.0" boto3 || \
     echo "⚠️  Could not install Bedrock dependencies; use --provider anthropic instead."
 fi
 
