@@ -1,4 +1,4 @@
-"""Parsing, comparación y rangos de versiones semánticas."""
+"""Parsing, comparison and ranges for semantic versions."""
 from __future__ import annotations
 
 import re

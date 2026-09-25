@@ -1,4 +1,4 @@
-"""Analiza qué cambia entre versiones de dependencias usando la doc del owner."""
+"""Analyze what changed between dependency versions using the owner's docs."""
 from __future__ import annotations
 
 import contextlib

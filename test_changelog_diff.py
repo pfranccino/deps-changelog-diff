@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Tests sin red para changelog-diff.py (funciones puras y parseo)."""
+"""Offline tests for changelog-diff (pure functions and parsing)."""
 import importlib.util
 import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 
 # El archivo tiene guion, no es importable por nombre: lo cargamos por ruta.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -587,7 +588,7 @@ class TestFixPlanRegressions(unittest.TestCase):
         self.assertEqual(doc["schema"], "deps-changelog-diff/change-intel-1")
         self.assertEqual(doc["meta"]["totals"]["analyzed"], 0)
         md = cd.render_intel_markdown(doc)
-        self.assertIn("0 analizadas", md)
+        self.assertIn("0 analyzed", md)
 
     # GitHub adapter with release/ tags (integration-level)
     def test_github_adapter_release_slash_tag(self):
@@ -622,6 +623,233 @@ class TestFixPlanRegressions(unittest.TestCase):
         vers = [n.version for n in notes]
         self.assertIn("2.9.1", vers)
         self.assertIn("2.8.0", vers)
+
+
+class TestLLMIntegration(unittest.TestCase):
+    """Tests for the LLM module (mocked — no API key needed)."""
+
+    def _make_mock_response(self, parsed_output):
+        resp = MagicMock()
+        resp.parsed_output = parsed_output
+        return resp
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_summarize_returns_valid_dict(self, MockAnthropic):
+        from changelog_diff.llm import summarize_with_llm, SummaryResult
+
+        fake_result = SummaryResult(
+            breaking_changes=["Removed setFoo() method"],
+            deprecations=["Bar class deprecated"],
+            new_features=["Added Baz support"],
+            security_fixes=[],
+            migration_effort="medium",
+            migration_notes="Replace setFoo() with configure(). Update Bar usages.",
+            tldr="Breaking removal of setFoo(), new Baz API added.",
+        )
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(fake_result)
+
+        result = summarize_with_llm(
+            "com.example:lib", "1.0.0", "2.0.0",
+            "## 2.0.0\n- Removed setFoo()\n- Deprecated Bar\n- Added Baz",
+            "claude-sonnet-5", "fake-key",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["breaking_changes"], ["Removed setFoo() method"])
+        self.assertEqual(result["migration_effort"], "medium")
+        self.assertIsInstance(result["new_features"], list)
+        self.assertIsInstance(result["security_fixes"], list)
+        self.assertEqual(len(result["security_fixes"]), 0)
+
+        call_kwargs = client.messages.parse.call_args.kwargs
+        self.assertEqual(call_kwargs["output_format"], SummaryResult)
+        self.assertIn("com.example:lib", call_kwargs["messages"][0]["content"])
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_enrich_intel_returns_valid_dict(self, MockAnthropic):
+        from changelog_diff.llm import enrich_intel_with_llm, IntelResult, Change, Seeds
+
+        fake_result = IntelResult(
+            changes=[
+                Change(
+                    kind="removal",
+                    summary="Removed setFoo() method",
+                    apis=["setFoo"],
+                    replacement="configure",
+                    version="2.0.0",
+                ),
+                Change(
+                    kind="deprecation",
+                    summary="Bar class deprecated in favor of Baz",
+                    apis=["Bar"],
+                    replacement="Baz",
+                    version="1.9.0",
+                ),
+            ],
+            seeds=Seeds(packages=["com.example.lib"], types=["Bar"], functions=["setFoo"]),
+            effort="medium",
+        )
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(fake_result)
+
+        result = enrich_intel_with_llm(
+            "com.example:lib", "1.0.0", "2.0.0",
+            "## 2.0.0\n- Removed setFoo()\n- Deprecated Bar, use Baz",
+            "claude-sonnet-5", "fake-key",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["changes"]), 2)
+        self.assertEqual(result["changes"][0]["kind"], "removal")
+        self.assertEqual(result["changes"][0]["apis"], ["setFoo"])
+        self.assertEqual(result["changes"][0]["replacement"], "configure")
+        self.assertEqual(result["seeds"]["types"], ["Bar"])
+        self.assertEqual(result["effort"], "medium")
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_api_error_returns_none(self, MockAnthropic):
+        from changelog_diff.llm import summarize_with_llm
+        import anthropic
+
+        client = MockAnthropic.return_value
+        client.messages.parse.side_effect = anthropic.APIError(
+            message="Unauthorized", request=MagicMock(), body=None,
+        )
+
+        result = summarize_with_llm(
+            "com.example:lib", "1.0.0", "2.0.0", "notes",
+            "claude-sonnet-5", "bad-key",
+        )
+        self.assertIsNone(result)
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_none_parsed_output_returns_none(self, MockAnthropic):
+        from changelog_diff.llm import enrich_intel_with_llm
+
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(None)
+
+        result = enrich_intel_with_llm(
+            "com.example:lib", "1.0.0", "2.0.0", "notes",
+            "claude-sonnet-5", "fake-key",
+        )
+        self.assertIsNone(result)
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_enrich_result_compatible_with_apply_enrichment(self, MockAnthropic):
+        """Verify the dict shape from enrich_intel_with_llm works with _apply_enrichment."""
+        from changelog_diff.llm import enrich_intel_with_llm, IntelResult, Change, Seeds
+
+        fake_result = IntelResult(
+            changes=[
+                Change(
+                    kind="breaking",
+                    summary="Removed deprecated OldApi class",
+                    apis=["OldApi"],
+                    replacement="NewApi",
+                    version="3.0.0",
+                ),
+            ],
+            seeds=Seeds(packages=["com.example"], types=["OldApi"], functions=[]),
+            effort="high",
+        )
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(fake_result)
+
+        enr = enrich_intel_with_llm(
+            "com.example:lib", "2.0.0", "3.0.0", "notes",
+            "claude-sonnet-5", "fake-key",
+        )
+
+        entry = {
+            "changes": [],
+            "seeds": {"packages": [], "types": [], "functions": []},
+            "effort": "low",
+            "source_url": "https://example.com",
+        }
+        cd._apply_enrichment(entry, enr)
+
+        self.assertTrue(entry["enriched"])
+        self.assertEqual(entry["effort"], "high")
+        self.assertEqual(entry["changes"][0]["kind"], "breaking")
+        self.assertEqual(entry["changes"][0]["replacement"], "NewApi")
+        self.assertEqual(entry["seeds"]["types"], ["OldApi"])
+        self.assertIn("OldApi", entry["impact_seeds"]["types"])
+
+    def test_pydantic_models_reject_invalid_kind(self):
+        from changelog_diff.llm import Change
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            Change(
+                kind="invalid_kind",
+                summary="test",
+                apis=[],
+                replacement=None,
+                version=None,
+            )
+
+    def test_pydantic_models_reject_invalid_effort(self):
+        from changelog_diff.llm import SummaryResult
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            SummaryResult(
+                breaking_changes=[],
+                deprecations=[],
+                new_features=[],
+                security_fixes=[],
+                migration_effort="extreme",
+                migration_notes="",
+                tldr="",
+            )
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_prompt_includes_dependency_info(self, MockAnthropic):
+        from changelog_diff.llm import summarize_with_llm, SummaryResult
+
+        fake_result = SummaryResult(
+            breaking_changes=[], deprecations=[], new_features=[],
+            security_fixes=[], migration_effort="low",
+            migration_notes="Nothing to do.", tldr="Patch release.",
+        )
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(fake_result)
+
+        summarize_with_llm(
+            "androidx.core:core", "1.9.0", "1.12.0",
+            "Bug fixes and improvements",
+            "claude-sonnet-5", "fake-key",
+        )
+
+        content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("androidx.core:core", content)
+        self.assertIn("1.9.0", content)
+        self.assertIn("1.12.0", content)
+        self.assertIn("Bug fixes and improvements", content)
+
+    @patch("changelog_diff.llm.anthropic.Anthropic")
+    def test_notes_truncated_at_60k_chars(self, MockAnthropic):
+        from changelog_diff.llm import summarize_with_llm, SummaryResult
+
+        fake_result = SummaryResult(
+            breaking_changes=[], deprecations=[], new_features=[],
+            security_fixes=[], migration_effort="low",
+            migration_notes="", tldr="",
+        )
+        client = MockAnthropic.return_value
+        client.messages.parse.return_value = self._make_mock_response(fake_result)
+
+        huge_notes = "Z" * 100000
+        summarize_with_llm(
+            "com.test:lib", "1.0.0", "2.0.0", huge_notes,
+            "claude-sonnet-5", "fake-key",
+        )
+
+        content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+        z_count = content.count("Z")
+        self.assertEqual(z_count, 60000)
 
 
 if __name__ == "__main__":

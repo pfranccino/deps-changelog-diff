@@ -1,4 +1,4 @@
-"""Renderizado a Markdown de los resultados."""
+"""Markdown rendering of results."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,32 +6,32 @@ from typing import Any
 
 
 def render_markdown(results: list[dict[str, Any]]) -> str:
-    lines = ["# Cambios entre versiones de dependencias", ""]
+    lines = ["# Dependency version changes", ""]
     lines.append(
-        f"_Generado: {datetime.now().isoformat(timespec='seconds')}_  "
+        f"_Generated: {datetime.now().isoformat(timespec='seconds')}_  "
     )
-    lines.append(f"_{len(results)} dependencias analizadas_")
+    lines.append(f"_{len(results)} dependencies analyzed_")
     lines.append("")
     for r in results:
         lines.append(f"## {r['coordinate']}  ·  {r['from']} → {r['to']}")
         src = (
             f"[{r['source']}]({r['source_url']})"
-            if r.get("source_url") else "(sin fuente)"
+            if r.get("source_url") else "(no source)"
         )
-        lines.append(f"Fuente: {src}")
+        lines.append(f"Source: {src}")
         lines.append("")
         summary = r.get("summary")
         if summary:
             lines.append(f"**TL;DR:** {summary.get('tldr', '')}")
             lines.append(
-                f"**Esfuerzo de migración:** "
+                f"**Migration effort:** "
                 f"{summary.get('migration_effort', '?')}"
             )
             for label, key in (
                 ("💥 Breaking", "breaking_changes"),
-                ("⚠️ Deprecaciones", "deprecations"),
-                ("✨ Nuevo", "new_features"),
-                ("🔒 Seguridad", "security_fixes"),
+                ("⚠️ Deprecations", "deprecations"),
+                ("✨ New", "new_features"),
+                ("🔒 Security", "security_fixes"),
             ):
                 items = summary.get(key) or []
                 if items:
@@ -39,7 +39,7 @@ def render_markdown(results: list[dict[str, Any]]) -> str:
                     lines.extend(f"- {it}" for it in items)
             if summary.get("migration_notes"):
                 lines.append(
-                    f"\n**Migración:** {summary['migration_notes']}"
+                    f"\n**Migration:** {summary['migration_notes']}"
                 )
             lines.append("")
         elif r.get("versions"):
@@ -51,27 +51,27 @@ def render_markdown(results: list[dict[str, Any]]) -> str:
                 lines.append("")
         else:
             lines.append(
-                "_No se encontraron notas de versión para este rango._"
+                "_No release notes found for this range._"
             )
             lines.append("")
     return "\n".join(lines)
 
 
 def render_intel_markdown(doc: dict) -> str:
-    lines = ["# Inteligencia de cambios de dependencias", ""]
+    lines = ["# Dependency change intelligence", ""]
     m = doc["meta"]
     lines.append(
-        f"_Generado: {m['generated_at']} · "
-        f"enriquecido: {m['enrichment']}_  "
+        f"_Generated: {m['generated_at']} · "
+        f"enrichment: {m['enrichment']}_  "
     )
     t = m["totals"]
     lines.append(
-        f"_{t['analyzed']} analizadas · {t['with_changes']} con cambios · "
-        f"{t['no_source']} sin fuente_"
+        f"_{t['analyzed']} analyzed · {t['with_changes']} with changes · "
+        f"{t['no_source']} without source_"
     )
     lines.append("")
     if doc["project_gates"]:
-        lines.append("## 🚧 Requisitos de proyecto (build)")
+        lines.append("## 🚧 Project requirements (build)")
         for g in doc["project_gates"]:
             lines.append(
                 f"- **{g['requirement']}** — por: {', '.join(g['from'])}"
@@ -82,14 +82,14 @@ def render_intel_markdown(doc: dict) -> str:
         doc["dependencies"].items(),
         key=lambda kv: (order.get(kv[1].get("effort"), 4), kv[0]),
     )
-    lines.append("## Dependencias")
+    lines.append("## Dependencies")
     for coord, e in deps:
         lines.append(
             f"### {coord} · {e['from']} → {e['to']} · {e['jump']} · "
-            f"esfuerzo {e['effort']} ({e['confidence']})"
+            f"effort {e['effort']} ({e['confidence']})"
         )
         if not e.get("changes"):
-            lines.append("_Sin cambios extraídos._\n")
+            lines.append("_No changes extracted._\n")
             continue
         for c in e["changes"][:12]:
             rep = (
@@ -103,7 +103,7 @@ def render_intel_markdown(doc: dict) -> str:
             )
             lines.append(
                 f"- [{c.get('kind', 'behavior')}] "
-                f"{c.get('summary', '(sin resumen)')}{rep}{apis}"
+                f"{c.get('summary', '(no summary)')}{rep}{apis}"
             )
         lines.append("")
     return "\n".join(lines)

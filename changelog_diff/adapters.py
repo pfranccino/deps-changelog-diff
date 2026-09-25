@@ -1,4 +1,4 @@
-"""Adaptadores de fuente: AndroidX, GitHub, Known Sources, Generic crawl."""
+"""Source adapters: AndroidX, GitHub, Known Sources, Generic crawl."""
 from __future__ import annotations
 
 import base64
@@ -193,7 +193,7 @@ class GitHubAdapter:
                         ver,
                         (rel.get("published_at") or "")[:10] or None,
                         rel.get("html_url"),
-                        rel.get("body") or "(sin cuerpo en el release)",
+                        rel.get("body") or "(no body in release)",
                     )
             if len(data) < 100:
                 break
@@ -250,7 +250,7 @@ class GenericCrawlAdapter:
 
 
 class KnownSourceAdapter:
-    """Páginas oficiales por-versión para librerías sin GitHub ni AndroidX."""
+    """Official per-version pages for libraries without GitHub or AndroidX."""
     name = "known"
     FIREBASE_URL = "https://firebase.google.com/support/release-notes/android"
     PLACES_URL = (
@@ -354,7 +354,7 @@ class KnownSourceAdapter:
 
 
 class SourceRouter:
-    """Elige el adaptador por tipo, con crawl4AI/genérico como último recurso."""
+    """Pick the adapter by type, with crawl4AI/generic as last resort."""
 
     def __init__(self, max_releases: int = 300, androidx_lang: str = "es-419"):
         self.androidx = AndroidXAdapter(lang=androidx_lang)

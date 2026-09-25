@@ -1,4 +1,4 @@
-"""Inteligencia de cambios: seeds, heurísticas, gates, normalización LLM."""
+"""Change intelligence: seeds, heuristics, gates, LLM normalization."""
 from __future__ import annotations
 
 import re
@@ -10,7 +10,7 @@ from .llm import enrich_intel_with_llm
 from .models import Dependency
 from .version import version_tuple, version_sort_key
 
-# ---- Símbolos y clasificación ------------------------------------------------
+# ---- Symbols and classification -----------------------------------------------
 
 _BACKTICK_RE = re.compile(r"`([A-Za-z][\w.]*(?:\(\))?)`")
 _REF_PKG_RE = re.compile(
@@ -140,12 +140,12 @@ def guess_confidence(
     source: str | None, versions: list[dict],
 ) -> tuple[str, str | None]:
     if not versions:
-        return "none", "sin changelog público por versión"
+        return "none", "no public per-version changelog"
     if (source == "github" and len(versions) == 1
             and len(versions[0].get("notes", "")) > 4000):
         return "medium", (
-            "el extractor colapsó en una sola nota; "
-            "revisar el mapeo por versión"
+            "extractor collapsed into a single note; "
+            "review per-version mapping"
         )
     if source in ("github", "androidx", "known"):
         return "high", None
@@ -330,8 +330,8 @@ def build_intel_document(
                 (e.get("source_url") or coord, e["from"], e["to"]), []
             ).append(coord)
         log(
-            f"   🧠 LLM sobre {len(targets)} deps en {len(groups)} "
-            f"grupos (dedup por repo)..."
+            f"   🧠 LLM on {len(targets)} deps in {len(groups)} "
+            f"groups (deduped by repo)..."
         )
         for (_su, _f, _t), coords in groups.items():
             enr = enrich_intel_with_llm(

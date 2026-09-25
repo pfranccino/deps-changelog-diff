@@ -1,136 +1,134 @@
-"""Capa LLM opcional: resúmenes e inteligencia estructurada vía Anthropic."""
+"""Optional LLM layer: summaries and structured intelligence via Anthropic."""
 from __future__ import annotations
 
-import json
-import re
-from typing import Any
+from typing import Any, Literal
 
-import requests
+import anthropic
+from pydantic import BaseModel
 
 from . import log
 
-SUMMARY_PROMPT = """Eres un ingeniero Android senior revisando cambios de dependencias.
-Te doy las notas de versión oficiales entre la versión que un proyecto usa y la última
-estable. Resume EN ESPAÑOL, sin inventar nada que no esté en las notas.
 
-Dependencia: {coordinate}
-De la versión {from_v} a la {to_v}
+# ---- Structured output schemas -----------------------------------------------
 
-Notas oficiales:
+class SummaryResult(BaseModel):
+    breaking_changes: list[str]
+    deprecations: list[str]
+    new_features: list[str]
+    security_fixes: list[str]
+    migration_effort: Literal["low", "medium", "high"]
+    migration_notes: str
+    tldr: str
+
+
+class Change(BaseModel):
+    kind: Literal[
+        "breaking", "removal", "deprecation", "requirement",
+        "security", "feature", "behavior",
+    ]
+    summary: str
+    apis: list[str]
+    replacement: str | None
+    version: str | None
+
+
+class Seeds(BaseModel):
+    packages: list[str]
+    types: list[str]
+    functions: list[str]
+
+
+class IntelResult(BaseModel):
+    changes: list[Change]
+    seeds: Seeds
+    effort: Literal["low", "medium", "high"]
+
+
+# ---- Prompts (business rules only; formatting handled by structured output) --
+
+SUMMARY_PROMPT = """You are a senior Android engineer reviewing dependency changes.
+You are given the official release notes between the version a project currently uses
+and the latest stable version. Summarize in English without inventing anything not in the notes.
+If a category does not apply, leave its list empty.
+
+Dependency: {coordinate}
+From version {from_v} to {to_v}
+
+Official release notes:
 ---
 {notes}
----
+---"""
 
-Responde SOLO con un objeto JSON con esta forma exacta:
-{{
-  "breaking_changes": ["..."],
-  "deprecations": ["..."],
-  "new_features": ["..."],
-  "security_fixes": ["..."],
-  "migration_effort": "low|medium|high",
-  "migration_notes": "1-3 frases con lo que habría que tocar",
-  "tldr": "una frase"
-}}
-Si una categoría no aplica, deja la lista vacía. No agregues texto fuera del JSON."""
+INTEL_PROMPT = """You are a senior Android engineer. You are given the official release notes
+of a dependency between the version in use and the latest stable version. Extract change
+intelligence so another tool can search for impact in the code. Do NOT invent anything
+not in the notes.
 
+Rules: prioritize breaking/removal/deprecation/requirement. In 'apis' put ONLY the
+AFFECTED symbols (the old ones to search/change), NOT the replacement. In 'replacement'
+put the new symbol only if the notes indicate it (e.g. 'deprecated X, use Y' -> apis:[X],
+replacement:Y). In 'seeds' put only real code symbols (packages, classes, functions),
+no constants or noise.
 
-INTEL_PROMPT = """Eres un ingeniero Android senior. Te doy las notas de versión oficiales de
-una dependencia entre la versión en uso y la última estable. Extrae inteligencia de cambios
-para que otra herramienta busque el impacto en el código. NO inventes nada que no esté en las notas.
+Dependency: {coordinate}   ({from_v} -> {to_v})
 
-Dependencia: {coordinate}   ({from_v} -> {to_v})
-
-Notas:
+Notes:
 ---
 {notes}
----
-
-Responde SOLO con un objeto JSON con esta forma exacta (en español los textos):
-{{
-  "changes": [
-    {{
-      "kind": "breaking|removal|deprecation|requirement|security|feature|behavior",
-      "summary": "una frase clara del cambio",
-      "apis": ["identificadores de API/clases/funciones mencionados"],
-      "replacement": "API nueva que reemplaza a la vieja, o null",
-      "version": "X.Y.Z donde ocurrió"
-    }}
-  ],
-  "seeds": {{ "packages": [], "types": [], "functions": [] }},
-  "effort": "low|medium|high"
-}}
-Reglas: prioriza breaking/removal/deprecation/requirement. En 'apis' pon SOLO los símbolos
-AFECTADOS (los viejos que hay que buscar/cambiar), NO el reemplazo. En 'replacement' pon el
-símbolo nuevo solo si las notas lo indican (ej. 'deprecated X, use Y' -> apis:[X], replacement:Y).
-En 'seeds' pon solo símbolos reales de código (paquetes, clases, funciones), sin constantes ni ruido.
-No agregues texto fuera del JSON."""
+---"""
 
 
-def _call_anthropic(payload: dict, api_key: str,
-                    timeout: int = 60) -> str | None:
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            json=payload, headers=headers, timeout=timeout,
-        )
-    except requests.RequestException as exc:
-        log(f"   ⚠️  fallo llamando al LLM: {exc}")
-        return None
-    if resp.status_code != 200:
-        log(f"   ⚠️  LLM devolvió {resp.status_code}: {resp.text[:200]}")
-        return None
-    return "".join(
-        b.get("text", "") for b in resp.json().get("content", [])
-    )
-
-
-def _parse_json(text: str | None) -> dict | None:
-    if not text:
-        return None
-    try:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        return json.loads(match.group(0)) if match else None
-    except Exception as exc:
-        log(f"   ⚠️  no pude parsear la respuesta del LLM: {exc}")
-        return None
-
+# ---- API calls ---------------------------------------------------------------
 
 def summarize_with_llm(
     coordinate: str, from_v: str, to_v: str, notes: str,
     model: str, api_key: str, timeout: int = 60,
 ) -> dict[str, Any] | None:
-    payload = {
-        "model": model,
-        "max_tokens": 1024,
-        "messages": [{
-            "role": "user",
-            "content": SUMMARY_PROMPT.format(
-                coordinate=coordinate, from_v=from_v, to_v=to_v,
-                notes=notes[:60000],
-            ),
-        }],
-    }
-    return _parse_json(_call_anthropic(payload, api_key, timeout))
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+    try:
+        response = client.messages.parse(
+            model=model,
+            max_tokens=1024,
+            output_format=SummaryResult,
+            messages=[{
+                "role": "user",
+                "content": SUMMARY_PROMPT.format(
+                    coordinate=coordinate, from_v=from_v, to_v=to_v,
+                    notes=notes[:60000],
+                ),
+            }],
+        )
+    except anthropic.APIError as exc:
+        log(f"   ⚠️  LLM call failed: {exc}")
+        return None
+    if response.parsed_output is None:
+        log("   ⚠️  LLM returned no structured output")
+        return None
+    return response.parsed_output.model_dump()
 
 
 def enrich_intel_with_llm(
     coordinate: str, from_v: str, to_v: str, notes: str,
     model: str, api_key: str, timeout: int = 60,
 ) -> dict | None:
-    payload = {
-        "model": model,
-        "max_tokens": 2048,
-        "messages": [{
-            "role": "user",
-            "content": INTEL_PROMPT.format(
-                coordinate=coordinate, from_v=from_v, to_v=to_v,
-                notes=notes[:60000],
-            ),
-        }],
-    }
-    return _parse_json(_call_anthropic(payload, api_key, timeout))
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+    try:
+        response = client.messages.parse(
+            model=model,
+            max_tokens=2048,
+            output_format=IntelResult,
+            messages=[{
+                "role": "user",
+                "content": INTEL_PROMPT.format(
+                    coordinate=coordinate, from_v=from_v, to_v=to_v,
+                    notes=notes[:60000],
+                ),
+            }],
+        )
+    except anthropic.APIError as exc:
+        log(f"   ⚠️  LLM call failed: {exc}")
+        return None
+    if response.parsed_output is None:
+        log("   ⚠️  LLM returned no structured output")
+        return None
+    return response.parsed_output.model_dump()

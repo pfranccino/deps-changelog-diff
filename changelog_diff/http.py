@@ -1,4 +1,4 @@
-"""Cliente HTTP compartido y conversión HTML→Markdown."""
+"""Shared HTTP client and HTML-to-Markdown conversion."""
 from __future__ import annotations
 
 import html as html_module
@@ -18,7 +18,7 @@ def _strip_tags(fragment: str) -> str:
 
 
 def html_to_markdownish(html: str) -> str:
-    """Convierte HTML a un Markdown suficiente para trocear por versión, SIN navegador."""
+    """Convert HTML to a Markdown sufficient for slicing by version, without a browser."""
     s = re.sub(r"(?is)<(script|style|noscript|svg).*?</\1>", " ", html)
     for level in range(1, 7):
         s = re.sub(
@@ -38,7 +38,7 @@ def html_to_markdownish(html: str) -> str:
 
 
 class Fetcher:
-    """Cliente HTTP thread-safe, con soporte opcional de crawl4AI para el fallback."""
+    """Thread-safe HTTP client with optional crawl4AI support for fallback."""
 
     def __init__(self, timeout: int = 20, github_token: str | None = None,
                  use_crawl4ai: bool = True):
@@ -64,11 +64,11 @@ class Fetcher:
         try:
             resp = self.session.get(url, timeout=self.timeout, headers=headers)
         except requests.RequestException as exc:
-            log(f"   ⚠️  fallo de red en {url}: {exc}")
+            log(f"   ⚠️  network error on {url}: {exc}")
             return None
         if resp.status_code == 200:
             return resp.text
-        log(f"   ⚠️  {resp.status_code} en {url}")
+        log(f"   ⚠️  {resp.status_code} on {url}")
         return None
 
     def get_json(self, url: str) -> Any | None:
@@ -78,14 +78,14 @@ class Fetcher:
         try:
             resp = self.session.get(url, timeout=self.timeout, headers=headers)
         except requests.RequestException as exc:
-            log(f"   ⚠️  fallo de red en {url}: {exc}")
+            log(f"   ⚠️  network error on {url}: {exc}")
             return None
         if resp.status_code == 200:
             return resp.json()
         if resp.status_code == 403 and "rate limit" in resp.text.lower():
-            log("   ⚠️  rate limit de GitHub. Pasa --github-token o GITHUB_TOKEN.")
+            log("   ⚠️  GitHub rate limit. Pass --github-token or GITHUB_TOKEN.")
         elif resp.status_code != 404:
-            log(f"   ⚠️  {resp.status_code} en {url}")
+            log(f"   ⚠️  {resp.status_code} on {url}")
         return None
 
     def get_rendered_markdown(self, url: str) -> str | None:
@@ -104,7 +104,7 @@ class Fetcher:
                     import crawl4ai  # noqa: F401
                     self._crawl4ai_ok = True
                 except Exception:
-                    log("   ℹ️  crawl4AI no está instalado; uso fetch HTTP simple para el fallback.")
+                    log("   ℹ️  crawl4AI is not installed; using plain HTTP fetch for fallback.")
                     self._crawl4ai_ok = False
         if not self._crawl4ai_ok:
             return None
@@ -119,5 +119,5 @@ class Fetcher:
 
             return asyncio.run(_run())
         except Exception as exc:
-            log(f"   ⚠️  crawl4AI falló en {url}: {exc}")
+            log(f"   ⚠️  crawl4AI failed on {url}: {exc}")
             return None

@@ -1,2 +1,4 @@
-# Dependencias del segundo proceso (changelog-diff.py).
+# Dependencies for the changelog-diff process.
 requests>=2.31.0
+anthropic>=0.40.0
+pydantic>=2.0.0

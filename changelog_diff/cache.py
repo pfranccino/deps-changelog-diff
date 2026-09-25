@@ -1,4 +1,4 @@
-"""Caché por (coordenada, rango de versión)."""
+"""Cache by (coordinate, version range)."""
 from __future__ import annotations
 
 import contextlib
@@ -12,7 +12,7 @@ from .models import Dependency
 
 
 class Cache:
-    """Los changelogs son inmutables por versión: se cachea el bloque de notas ya montado."""
+    """Changelogs are immutable per version: cache the assembled notes block."""
 
     def __init__(self, directory: str | None, opts_key: str = ""):
         self.directory = directory
