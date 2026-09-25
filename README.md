@@ -122,13 +122,13 @@ export GITHUB_TOKEN=ghp_DEFAULT_TOKEN
 python changelog-diff.py dependency_status.json --api-key sk-ant-YOUR_KEY --summarize
 ```
 
-**Using AWS Bedrock instead of direct Anthropic API:**
+**Using [Amazon Bedrock](https://docs.aws.amazon.com/bedrock/) instead of direct Anthropic API:**
 
 ```bash
-# Install the Bedrock extra
-pip install anthropic[bedrock]
+# Install the Bedrock extra (check-changelog.sh auto-installs it when --provider bedrock is passed)
+pip install "anthropic[bedrock]>=0.40.0" boto3
 
-# Uses default AWS credentials (env vars, ~/.aws/credentials, IAM role, etc.)
+# Uses default AWS credential chain
 python changelog-diff.py dependency_status.json --summarize --provider bedrock
 
 # Specify region and profile
@@ -141,15 +141,78 @@ export AWS_REGION=us-east-1
 python changelog-diff.py dependency_status.json --summarize
 ```
 
-**Credential resolution for Bedrock** (checked in order):
+### Bedrock credential resolution
 
-1. CLI arguments (`--aws-region`, `--aws-profile`)
-2. Standard environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, etc.)
-3. Claude Code settings (`~/.claude/settings.json` → `env` block, as configured by `/setup-bedrock`)
-4. boto3 default credential chain (`~/.aws/credentials`, IAM role, etc.)
+The tool resolves AWS credentials using the same chain as the
+[Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python):
 
-If your Claude Code settings use a **Bedrock API key** (`AWS_BEARER_TOKEN_BEDROCK`), it is picked up automatically.
-Model names are auto-mapped to Bedrock format (e.g. `claude-haiku-4-5-20251001` → `us.anthropic.claude-haiku-4-5-20251001-v1:0`).
+1. **Environment variables** — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+   `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_PROFILE`
+   ([AWS docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html))
+2. **Claude Code settings** — the `env` block in `~/.claude/settings.json`,
+   as configured by the [`/setup-bedrock` wizard](https://code.claude.com/docs/en/amazon-bedrock#sign-in-with-bedrock).
+   Values from the `env` block are exported to the process environment so the
+   SDK picks them up through its standard chain
+3. **boto3 default credential chain** — `~/.aws/credentials`, IAM role, etc.
+   ([boto3 docs](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html))
+
+### Supported authentication methods
+
+| Method | Environment variable | Reference |
+|---|---|---|
+| Access key + secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | [AWS docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html) |
+| Session token (STS) | `AWS_SESSION_TOKEN` | [AWS docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html) |
+| Bedrock API key | `AWS_BEARER_TOKEN_BEDROCK` | [Anthropic docs](https://code.claude.com/docs/en/amazon-bedrock#2-configure-aws-credentials) |
+| AWS profile / SSO | `AWS_PROFILE` | [AWS docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html) |
+| Custom gateway | `ANTHROPIC_BEDROCK_BASE_URL` | [Anthropic docs](https://code.claude.com/docs/en/amazon-bedrock) |
+| Custom headers | `ANTHROPIC_CUSTOM_HEADERS` | [Anthropic docs](https://code.claude.com/docs/en/amazon-bedrock#aws-guardrails) |
+
+When `ANTHROPIC_BEDROCK_BASE_URL` is set (gateway mode), the tool sends requests
+to the custom endpoint with any `ANTHROPIC_CUSTOM_HEADERS` and skips local AWS
+credential resolution — the gateway handles authentication.
+
+### Claude Code settings example
+
+If you use [Claude Code](https://code.claude.com) with Bedrock, the tool reads
+the [`env` block](https://code.claude.com/docs/en/settings-reference#env) from
+`~/.claude/settings.json` automatically:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-east-1",
+    "AWS_BEARER_TOKEN_BEDROCK": "your-bedrock-api-key"
+  }
+}
+```
+
+Gateway configuration:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "ANTHROPIC_BEDROCK_BASE_URL": "https://your-gateway.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "X-Custom-Header: value"
+  }
+}
+```
+
+See the [Amazon Bedrock setup guide](https://code.claude.com/docs/en/amazon-bedrock)
+for all configuration options.
+
+### Model auto-mapping
+
+Model names are auto-mapped to Bedrock format — no need to pass the full ID:
+
+| CLI model name | Bedrock model ID |
+|---|---|
+| `claude-haiku-4-5-20251001` (default) | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `claude-sonnet-5` | `us.anthropic.claude-sonnet-5-20250514-v1:0` |
+| `claude-opus-5-5` | `us.anthropic.claude-opus-5-5-20250918-v1:0` |
+
+You can also pass a full Bedrock model ID directly with `--model`.
 
 ## Output
 
