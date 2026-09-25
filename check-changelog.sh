@@ -12,7 +12,7 @@
 #   ./check-changelog.sh --summarize --api-key sk-ant-...    # LLM enrichment with API key
 #   ./check-changelog.sh --github-token ghp_...              # pass GitHub token as argument
 #   WITH_CRAWL4AI=1 ./check-changelog.sh                     # install crawl4AI (fallback)
-#   WITH_BEDROCK=1 ./check-changelog.sh --summarize --provider bedrock  # AWS Bedrock support
+#   ./check-changelog.sh --summarize --provider bedrock  # AWS Bedrock (auto-installs boto3)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv-changelog"
@@ -70,10 +70,16 @@ if [ "${WITH_CRAWL4AI:-0}" = "1" ]; then
   fi
 fi
 
-# Bedrock is optional: only installed if you set WITH_BEDROCK=1.
-# It pulls in boto3 and AWS SDK dependencies.
-if [ "${WITH_BEDROCK:-0}" = "1" ]; then
-  echo "📦 Installing Bedrock support (requested via WITH_BEDROCK=1)..."
+# Bedrock: auto-install boto3 when --provider bedrock is in the arguments.
+NEEDS_BEDROCK=0
+for arg in "$@"; do
+  if [ "$arg" = "bedrock" ] || [ "${WITH_BEDROCK:-0}" = "1" ]; then
+    NEEDS_BEDROCK=1
+    break
+  fi
+done
+if [ "${NEEDS_BEDROCK}" = "1" ]; then
+  echo "📦 Installing Bedrock support (boto3 + AWS SDK)..."
   "${VENV_PYTHON}" -m pip install --quiet "anthropic[bedrock]>=0.40.0" || \
     echo "⚠️  Could not install Bedrock dependencies; use --provider anthropic instead."
 fi
