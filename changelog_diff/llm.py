@@ -13,36 +13,44 @@ from . import log
 
 # ---- Client factory ----------------------------------------------------------
 
-_CLAUDE_SETTINGS_PATHS = [
-    os.path.expanduser("~/.claude/settings.json"),
-    os.path.expanduser("~/.claude/settings.local.json"),
-]
-
-
 def _load_claude_env() -> dict[str, str]:
-    """Read the env block from Claude Code settings.json files."""
+    """Read the env block from Claude Code settings files.
+
+    settings.local.json overrides settings.json (local wins).
+    """
     env: dict[str, str] = {}
-    for path in _CLAUDE_SETTINGS_PATHS:
+    for path in (
+        os.path.expanduser("~/.claude/settings.json"),
+        os.path.expanduser("~/.claude/settings.local.json"),
+    ):
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.loads(f.read())
-            for k, v in (data.get("env") or {}).items():
+            if not isinstance(data, dict):
+                continue
+            raw = data.get("env")
+            if not isinstance(raw, dict):
+                continue
+            for k, v in raw.items():
                 if isinstance(v, str) and v:
-                    env.setdefault(k, v)
-        except (OSError, json.JSONDecodeError, TypeError):
+                    env[k] = v
+        except (OSError, json.JSONDecodeError, ValueError):
             continue
     return env
 
 
-def _inject_claude_bedrock_env() -> None:
-    """Inject Claude Code Bedrock env vars into os.environ if not already set."""
-    claude_env = _load_claude_env()
-    for key in (
-        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-        "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE",
-    ):
-        if key not in os.environ and key in claude_env:
-            os.environ[key] = claude_env[key]
+def _resolve(cli_val: str | None, *env_keys: str,
+             env: dict[str, str] | None = None) -> str | None:
+    """Return cli_val if set, else first matching env key, else None."""
+    if cli_val:
+        return cli_val
+    for key in env_keys:
+        val = os.environ.get(key)
+        if val:
+            return val
+        if env and env.get(key):
+            return env[key]
+    return None
 
 
 def make_client(
@@ -55,12 +63,15 @@ def make_client(
     """Return an Anthropic or AnthropicBedrock client."""
     if provider == "bedrock":
         from anthropic import AnthropicBedrock
-        _inject_claude_bedrock_env()
-        if not aws_region:
-            aws_region = (
-                os.environ.get("AWS_REGION")
-                or os.environ.get("AWS_DEFAULT_REGION")
-            )
+        claude_env = _load_claude_env()
+
+        aws_region = _resolve(aws_region, "AWS_REGION",
+                              "AWS_DEFAULT_REGION", env=claude_env)
+        aws_profile = _resolve(aws_profile, "AWS_PROFILE", env=claude_env)
+        aws_access_key = _resolve(None, "AWS_ACCESS_KEY_ID", env=claude_env)
+        aws_secret_key = _resolve(None, "AWS_SECRET_ACCESS_KEY", env=claude_env)
+        aws_session_token = _resolve(None, "AWS_SESSION_TOKEN", env=claude_env)
+
         if not aws_region:
             try:
                 import boto3
@@ -68,14 +79,19 @@ def make_client(
                 aws_region = session.region_name
             except Exception:
                 pass
-        if not aws_profile:
-            aws_profile = os.environ.get("AWS_PROFILE")
+
         kwargs: dict[str, Any] = {
             "timeout": timeout,
             "aws_region": aws_region or "us-east-1",
         }
         if aws_profile:
             kwargs["aws_profile"] = aws_profile
+        if aws_access_key:
+            kwargs["aws_access_key"] = aws_access_key
+        if aws_secret_key:
+            kwargs["aws_secret_key"] = aws_secret_key
+        if aws_session_token:
+            kwargs["aws_session_token"] = aws_session_token
         return AnthropicBedrock(**kwargs)
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
