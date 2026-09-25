@@ -134,8 +134,7 @@ def main() -> int:
         default=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         help="Model for summaries (or ANTHROPIC_MODEL env var). "
              "Default: claude-haiku-4-5-20251001. "
-             "For Bedrock use the full model ID, e.g. "
-             "us.anthropic.claude-haiku-4-5-20251001-v1:0.",
+             "Auto-mapped to Bedrock format when --provider bedrock.",
     )
     parser.add_argument(
         "--cache-dir", default=".changelog-cache",
@@ -171,6 +170,14 @@ def main() -> int:
         help="Suppress progress output.",
     )
     args = parser.parse_args()
+
+    BEDROCK_MODELS = {
+        "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "claude-sonnet-5": "us.anthropic.claude-sonnet-5-20250514-v1:0",
+        "claude-opus-5-5": "us.anthropic.claude-opus-5-5-20250918-v1:0",
+    }
+    if args.provider == "bedrock" and args.model in BEDROCK_MODELS:
+        args.model = BEDROCK_MODELS[args.model]
 
     changelog_diff._QUIET = args.quiet
 
