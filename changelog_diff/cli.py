@@ -93,7 +93,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--summarize", action="store_true",
-        help="Enrich with LLM (requires ANTHROPIC_API_KEY).",
+        help="Enrich with LLM (requires --api-key or ANTHROPIC_API_KEY).",
     )
     parser.add_argument(
         "--summarize-scope", choices=("major", "all"), default="major",
@@ -106,6 +106,11 @@ def main() -> int:
     parser.add_argument(
         "--compare", action="store_true",
         help="Run heuristic vs LLM (intel), report the delta.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("ANTHROPIC_API_KEY"),
+        help="Anthropic API key (or ANTHROPIC_API_KEY env var).",
     )
     parser.add_argument(
         "--model",
@@ -188,9 +193,9 @@ def main() -> int:
                     handle.write(render_markdown([]))
         return 0
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = args.api_key
     if args.summarize and not api_key:
-        log("   ⚠️  --summarize requested but ANTHROPIC_API_KEY is not set.")
+        log("   ⚠️  --summarize requested but no API key provided. Use --api-key or ANTHROPIC_API_KEY.")
 
     cache_dir = (
         None if args.cache_dir.lower() in ("", "none") else args.cache_dir
