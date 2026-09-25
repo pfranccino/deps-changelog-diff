@@ -40,6 +40,17 @@ def _load_claude_env() -> dict[str, str]:
 
 
 
+def _parse_custom_headers(raw: str) -> dict[str, str]:
+    """Parse ANTHROPIC_CUSTOM_HEADERS ('Key: Val\\nKey2: Val2') into a dict."""
+    headers: dict[str, str] = {}
+    for line in raw.split("\n"):
+        line = line.strip()
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip()] = v.strip()
+    return headers
+
+
 def make_client(
     provider: str = "anthropic",
     api_key: str | None = None,
@@ -70,10 +81,22 @@ def make_client(
             except Exception:
                 pass
 
-        return AnthropicBedrock(
-            aws_region=aws_region or "us-east-1",
-            timeout=timeout,
-        )
+        kwargs: dict[str, Any] = {
+            "aws_region": aws_region or "us-east-1",
+            "timeout": timeout,
+        }
+
+        custom_h = os.environ.get("ANTHROPIC_CUSTOM_HEADERS")
+        if custom_h:
+            kwargs["default_headers"] = _parse_custom_headers(custom_h)
+
+        base_url = os.environ.get("ANTHROPIC_BEDROCK_BASE_URL")
+        if base_url:
+            kwargs["base_url"] = base_url
+            if not os.environ.get("AWS_ACCESS_KEY_ID"):
+                kwargs["api_key"] = "gateway"
+
+        return AnthropicBedrock(**kwargs)
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
 
