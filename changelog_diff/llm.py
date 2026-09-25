@@ -39,7 +39,6 @@ def _load_claude_env() -> dict[str, str]:
     return env
 
 
-
 def _parse_custom_headers(raw: str) -> dict[str, str]:
     """Parse ANTHROPIC_CUSTOM_HEADERS ('Key: Val\\nKey2: Val2') into a dict."""
     headers: dict[str, str] = {}
@@ -63,20 +62,22 @@ def make_client(
         from anthropic import AnthropicBedrock
         claude_env = _load_claude_env()
 
-        for key, val in claude_env.items():
-            if key not in os.environ:
-                os.environ[key] = val
+        def _get(key: str) -> str | None:
+            return os.environ.get(key) or claude_env.get(key) or None
 
-        aws_region = (
-            aws_region
-            or os.environ.get("AWS_REGION")
-            or os.environ.get("AWS_DEFAULT_REGION")
-        )
+        bearer = _get("AWS_BEARER_TOKEN_BEDROCK")
+        aws_region = aws_region or _get("AWS_REGION") or _get("AWS_DEFAULT_REGION")
+        aws_profile = aws_profile or _get("AWS_PROFILE")
+        access_key = _get("AWS_ACCESS_KEY_ID")
+        secret_key = _get("AWS_SECRET_ACCESS_KEY")
+        session_token = _get("AWS_SESSION_TOKEN")
+        base_url = _get("ANTHROPIC_BEDROCK_BASE_URL")
+        custom_h = _get("ANTHROPIC_CUSTOM_HEADERS")
+
         if not aws_region:
             try:
                 import boto3
-                profile = aws_profile or os.environ.get("AWS_PROFILE")
-                session = boto3.Session(profile_name=profile)
+                session = boto3.Session(profile_name=aws_profile)
                 aws_region = session.region_name
             except Exception:
                 pass
@@ -86,15 +87,25 @@ def make_client(
             "timeout": timeout,
         }
 
-        custom_h = os.environ.get("ANTHROPIC_CUSTOM_HEADERS")
         if custom_h:
             kwargs["default_headers"] = _parse_custom_headers(custom_h)
 
-        base_url = os.environ.get("ANTHROPIC_BEDROCK_BASE_URL")
         if base_url:
             kwargs["base_url"] = base_url
-            if not os.environ.get("AWS_ACCESS_KEY_ID"):
-                kwargs["api_key"] = "gateway"
+
+        if bearer:
+            kwargs["api_key"] = bearer
+        elif base_url and not access_key:
+            kwargs["api_key"] = "gateway"
+        else:
+            if aws_profile:
+                kwargs["aws_profile"] = aws_profile
+            if access_key:
+                kwargs["aws_access_key"] = access_key
+            if secret_key:
+                kwargs["aws_secret_key"] = secret_key
+            if session_token:
+                kwargs["aws_session_token"] = session_token
 
         return AnthropicBedrock(**kwargs)
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
