@@ -1,6 +1,8 @@
 """Optional LLM layer: summaries and structured intelligence via Anthropic."""
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Literal
 
 import anthropic
@@ -10,6 +12,38 @@ from . import log
 
 
 # ---- Client factory ----------------------------------------------------------
+
+_CLAUDE_SETTINGS_PATHS = [
+    os.path.expanduser("~/.claude/settings.json"),
+    os.path.expanduser("~/.claude/settings.local.json"),
+]
+
+
+def _load_claude_env() -> dict[str, str]:
+    """Read the env block from Claude Code settings.json files."""
+    env: dict[str, str] = {}
+    for path in _CLAUDE_SETTINGS_PATHS:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.loads(f.read())
+            for k, v in (data.get("env") or {}).items():
+                if isinstance(v, str) and v:
+                    env.setdefault(k, v)
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+    return env
+
+
+def _inject_claude_bedrock_env() -> None:
+    """Inject Claude Code Bedrock env vars into os.environ if not already set."""
+    claude_env = _load_claude_env()
+    for key in (
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+        "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE",
+    ):
+        if key not in os.environ and key in claude_env:
+            os.environ[key] = claude_env[key]
+
 
 def make_client(
     provider: str = "anthropic",
@@ -21,6 +55,12 @@ def make_client(
     """Return an Anthropic or AnthropicBedrock client."""
     if provider == "bedrock":
         from anthropic import AnthropicBedrock
+        _inject_claude_bedrock_env()
+        if not aws_region:
+            aws_region = (
+                os.environ.get("AWS_REGION")
+                or os.environ.get("AWS_DEFAULT_REGION")
+            )
         if not aws_region:
             try:
                 import boto3
@@ -28,6 +68,8 @@ def make_client(
                 aws_region = session.region_name
             except Exception:
                 pass
+        if not aws_profile:
+            aws_profile = os.environ.get("AWS_PROFILE")
         kwargs: dict[str, Any] = {
             "timeout": timeout,
             "aws_region": aws_region or "us-east-1",
