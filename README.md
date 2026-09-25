@@ -26,10 +26,14 @@ breaking change que se coló en medio.
 ## 🚀 Uso
 
 ```bash
-# 1) Primero toml-deps-checker, que deja dependency_status.json
-./check-dependencies.sh ./gradle
+# 1) Clona y ejecuta toml-deps-checker para generar dependency_status.json
+#    → https://github.com/pfranccino/toml-deps-checker
+git clone https://github.com/pfranccino/toml-deps-checker.git
+cd toml-deps-checker
+./check-dependencies.sh /ruta/a/tu/proyecto/gradle
+# Esto genera dependency_status.json con el estado de cada dependencia.
 
-# 2) Luego el análisis de cambios
+# 2) Luego, en este repo, el análisis de cambios
 ./check-changelog.sh                                   # usa ./dependency_status.json
 ./check-changelog.sh --md changelog.md                 # además, un Markdown legible
 ./check-changelog.sh ./ruta/dependency_status.json -o cambios.json
