@@ -1,14 +1,49 @@
-"""Optional LLM layer: summaries and structured intelligence via Anthropic."""
+"""Optional LLM layer: summaries and structured intelligence via Anthropic.
+
+`anthropic` and `pydantic` are optional (extra `llm`): they are imported on first
+use so the raw/heuristic paths work without them.
+"""
 from __future__ import annotations
 
+import functools
 import json
 import os
+import types
 from typing import Any, Literal
 
-import anthropic
-from pydantic import BaseModel
-
 from . import log
+
+INSTALL_HINT = (
+    "LLM support needs the 'llm' extra: "
+    "pipx install \"deps-changelog-diff[llm] @ "
+    "git+https://github.com/pfranccino/deps-changelog-diff\" "
+    "(or pip install anthropic pydantic)."
+)
+
+# Bedrock inference-profile IDs (US geo), checked against the Bedrock model
+# cards on 2026-10-04. Anything else is passed through as-is, so a full ID
+# (e.g. global.anthropic.claude-sonnet-5) always works.
+BEDROCK_MODELS = {
+    "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-sonnet-5": "us.anthropic.claude-sonnet-5",
+    "claude-opus-5-5": "us.anthropic.claude-opus-5-5",
+}
+# Bedrock lists structured outputs as unsupported for these; messages.parse needs it.
+_BEDROCK_NO_STRUCTURED = ("claude-sonnet-5", "claude-opus-5-5")
+
+
+def bedrock_model_id(model: str) -> str:
+    """Map a short Anthropic model name to its Bedrock ID (pass-through otherwise)."""
+    resolved = BEDROCK_MODELS.get(model, model)
+    if any(resolved.endswith(f"anthropic.{m}") for m in _BEDROCK_NO_STRUCTURED):
+        log(f"   ⚠️  Bedrock does not list structured outputs for {resolved}; "
+            "LLM calls may fail. claude-haiku-4-5-20251001 supports them.")
+    return resolved
+
+
+def _anthropic():
+    import anthropic
+    return anthropic
 
 
 # ---- Client factory ----------------------------------------------------------
@@ -56,8 +91,15 @@ def make_client(
     aws_region: str | None = None,
     aws_profile: str | None = None,
     timeout: int = 60,
-) -> anthropic.Anthropic:
-    """Return an Anthropic or AnthropicBedrock client."""
+) -> Any:
+    """Return an Anthropic or AnthropicBedrock client.
+
+    Raises ImportError (with INSTALL_HINT) when the SDK is not installed.
+    """
+    try:
+        anthropic = _anthropic()
+    except ImportError as exc:
+        raise ImportError(INSTALL_HINT) from exc
     if provider == "bedrock":
         from anthropic import AnthropicBedrock
         claude_env = _load_claude_env()
@@ -111,39 +153,51 @@ def make_client(
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
 
-# ---- Structured output schemas -----------------------------------------------
+# ---- Structured output schemas (built lazily: pydantic is optional) ----------
 
-class SummaryResult(BaseModel):
-    breaking_changes: list[str]
-    deprecations: list[str]
-    new_features: list[str]
-    security_fixes: list[str]
-    migration_effort: Literal["low", "medium", "high"]
-    migration_notes: str
-    tldr: str
+@functools.lru_cache(maxsize=None)
+def _schemas() -> types.SimpleNamespace:
+    from pydantic import BaseModel
+
+    class SummaryResult(BaseModel):
+        breaking_changes: list[str]
+        deprecations: list[str]
+        new_features: list[str]
+        security_fixes: list[str]
+        migration_effort: Literal["low", "medium", "high"]
+        migration_notes: str
+        tldr: str
+
+    class Change(BaseModel):
+        kind: Literal[
+            "breaking", "removal", "deprecation", "requirement",
+            "security", "feature", "behavior",
+        ]
+        summary: str
+        apis: list[str]
+        replacement: str | None
+        version: str | None
+
+    class Seeds(BaseModel):
+        packages: list[str]
+        types: list[str]
+        functions: list[str]
+
+    class IntelResult(BaseModel):
+        changes: list[Change]
+        seeds: Seeds
+        effort: Literal["low", "medium", "high"]
+
+    return types.SimpleNamespace(
+        SummaryResult=SummaryResult, Change=Change,
+        Seeds=Seeds, IntelResult=IntelResult,
+    )
 
 
-class Change(BaseModel):
-    kind: Literal[
-        "breaking", "removal", "deprecation", "requirement",
-        "security", "feature", "behavior",
-    ]
-    summary: str
-    apis: list[str]
-    replacement: str | None
-    version: str | None
-
-
-class Seeds(BaseModel):
-    packages: list[str]
-    types: list[str]
-    functions: list[str]
-
-
-class IntelResult(BaseModel):
-    changes: list[Change]
-    seeds: Seeds
-    effort: Literal["low", "medium", "high"]
+def __getattr__(name: str) -> Any:
+    if name in ("SummaryResult", "Change", "Seeds", "IntelResult"):
+        return getattr(_schemas(), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---- Prompts (business rules only; formatting handled by structured output) --
@@ -182,53 +236,54 @@ Notes:
 
 # ---- API calls ---------------------------------------------------------------
 
-def summarize_with_llm(
-    coordinate: str, from_v: str, to_v: str, notes: str,
-    model: str, client: anthropic.Anthropic,
+def _parse(
+    client: Any, model: str, max_tokens: int, schema: Any, prompt: str,
 ) -> dict[str, Any] | None:
+    anthropic = _anthropic()
     try:
         response = client.messages.parse(
             model=model,
-            max_tokens=1024,
-            output_format=SummaryResult,
-            messages=[{
-                "role": "user",
-                "content": SUMMARY_PROMPT.format(
-                    coordinate=coordinate, from_v=from_v, to_v=to_v,
-                    notes=notes[:60000],
-                ),
-            }],
+            max_tokens=max_tokens,
+            output_format=schema,
+            messages=[{"role": "user", "content": prompt}],
         )
     except anthropic.APIError as exc:
         log(f"   ⚠️  LLM call failed: {exc}")
+        return None
+    except ValueError as exc:  # pydantic.ValidationError: invalid/partial JSON
+        log(f"   ⚠️  LLM output did not match the schema: {exc}")
+        return None
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        log(f"   ⚠️  LLM output truncated at max_tokens={max_tokens}; "
+            "result discarded.")
         return None
     if response.parsed_output is None:
         log("   ⚠️  LLM returned no structured output")
         return None
     return response.parsed_output.model_dump()
+
+
+def summarize_with_llm(
+    coordinate: str, from_v: str, to_v: str, notes: str,
+    model: str, client: Any,
+) -> dict[str, Any] | None:
+    return _parse(
+        client, model, 1024, _schemas().SummaryResult,
+        SUMMARY_PROMPT.format(
+            coordinate=coordinate, from_v=from_v, to_v=to_v,
+            notes=notes[:60000],
+        ),
+    )
 
 
 def enrich_intel_with_llm(
     coordinate: str, from_v: str, to_v: str, notes: str,
-    model: str, client: anthropic.Anthropic,
+    model: str, client: Any,
 ) -> dict | None:
-    try:
-        response = client.messages.parse(
-            model=model,
-            max_tokens=2048,
-            output_format=IntelResult,
-            messages=[{
-                "role": "user",
-                "content": INTEL_PROMPT.format(
-                    coordinate=coordinate, from_v=from_v, to_v=to_v,
-                    notes=notes[:60000],
-                ),
-            }],
-        )
-    except anthropic.APIError as exc:
-        log(f"   ⚠️  LLM call failed: {exc}")
-        return None
-    if response.parsed_output is None:
-        log("   ⚠️  LLM returned no structured output")
-        return None
-    return response.parsed_output.model_dump()
+    return _parse(
+        client, model, 8192, _schemas().IntelResult,
+        INTEL_PROMPT.format(
+            coordinate=coordinate, from_v=from_v, to_v=to_v,
+            notes=notes[:60000],
+        ),
+    )

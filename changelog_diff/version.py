@@ -32,6 +32,9 @@ def version_sort_key(version: str) -> tuple[tuple[int, ...], int, int]:
     if not match:
         return ((0,), STABLE, 0)
     rel = tuple(int(n) for n in match.group(1).split("."))
+    # 1.2 == 1.2.0: drop trailing zeros so tuples of different length compare right.
+    while len(rel) > 1 and rel[-1] == 0:
+        rel = rel[:-1]
     rest = match.group(2).lower()
     rank, num = STABLE, 0
     best_idx = len(rest) + 1

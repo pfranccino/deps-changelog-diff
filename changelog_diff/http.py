@@ -1,14 +1,15 @@
 """Shared HTTP client and HTML-to-Markdown conversion."""
 from __future__ import annotations
 
+import concurrent.futures
 import html as html_module
 import re
 import threading
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
-from . import log
+from . import __version__, log
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -38,18 +39,39 @@ def html_to_markdownish(html: str) -> str:
 
 
 class Fetcher:
-    """Thread-safe HTTP client with optional crawl4AI support for fallback."""
+    """Thread-safe HTTP client with optional crawl4AI support for fallback.
+
+    Responses are memoized per URL for the lifetime of the Fetcher: artifacts
+    that share a page (AndroidX groups, GitHub repos) download it once, and
+    concurrent requests for the same URL wait on the same download.
+    """
 
     def __init__(self, timeout: int = 20, github_token: str | None = None,
                  use_crawl4ai: bool = True):
         self.timeout = timeout
         self._local = threading.local()
-        self._ua = "toml-deps-changelog/1.0"
+        self._ua = f"deps-changelog-diff/{__version__}"
         self.github_token = github_token
         self.use_crawl4ai = use_crawl4ai
         self._crawler_lock = threading.Lock()
         self._crawler_checked = False
         self._crawl4ai_ok = False
+        self._memo: dict[tuple, concurrent.futures.Future] = {}
+        self._memo_lock = threading.Lock()
+
+    def _memoized(self, key: tuple, fn: Callable[[], Any]) -> Any:
+        with self._memo_lock:
+            future = self._memo.get(key)
+            owner = future is None
+            if owner:
+                future = concurrent.futures.Future()
+                self._memo[key] = future
+        if owner:
+            try:
+                future.set_result(fn())
+            except BaseException as exc:
+                future.set_exception(exc)
+        return future.result()
 
     @property
     def session(self) -> requests.Session:
@@ -61,6 +83,10 @@ class Fetcher:
         return s
 
     def get_text(self, url: str, headers: dict[str, str] | None = None) -> str | None:
+        key = ("text", url, tuple(sorted((headers or {}).items())))
+        return self._memoized(key, lambda: self._get_text(url, headers))
+
+    def _get_text(self, url: str, headers: dict[str, str] | None) -> str | None:
         try:
             resp = self.session.get(url, timeout=self.timeout, headers=headers)
         except requests.RequestException as exc:
@@ -72,6 +98,9 @@ class Fetcher:
         return None
 
     def get_json(self, url: str) -> Any | None:
+        return self._memoized(("json", url), lambda: self._get_json(url))
+
+    def _get_json(self, url: str) -> Any | None:
         headers = {"Accept": "application/vnd.github+json"}
         if self.github_token:
             headers["Authorization"] = f"Bearer {self.github_token}"
@@ -89,6 +118,9 @@ class Fetcher:
         return None
 
     def get_rendered_markdown(self, url: str) -> str | None:
+        return self._memoized(("md", url), lambda: self._get_rendered_markdown(url))
+
+    def _get_rendered_markdown(self, url: str) -> str | None:
         if self.use_crawl4ai:
             md = self._crawl4ai(url)
             if md is not None:

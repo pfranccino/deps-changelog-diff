@@ -41,6 +41,11 @@ class Dependency:
 def load_dependencies(path: str, include_all: bool) -> list[Dependency]:
     with open(path, "r", encoding="utf-8") as handle:
         raw = json.load(handle)
+    # toml-deps-checker status-2+: {"schema", "meta", "dependencies": {...}}
+    if isinstance(raw, dict) and str(raw.get("schema", "")).startswith(
+        "toml-deps-checker/status-"
+    ):
+        raw = raw.get("dependencies") or {}
     deps = []
     for coordinate, data in raw.items():
         if not isinstance(data, dict):

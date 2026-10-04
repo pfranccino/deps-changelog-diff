@@ -845,5 +845,177 @@ class TestLLMIntegration(unittest.TestCase):
         self.assertEqual(z_count, 60000)
 
 
+class TestReviewFixes(unittest.TestCase):
+    """Regresiones de deps-changelog-diff.md (revisión 2026-10-04)."""
+
+    # 1.1 — AndroidX se analiza en inglés; --androidx-lang solo cambia el enlace
+    def test_androidx_fetches_english_links_lang(self):
+        md = "### Version 1.13.0\nSeptember 09, 2026\nRemoved `Foo`.\n"
+        fetched = []
+
+        class FakeFetcher:
+            def get_rendered_markdown(self, url):
+                fetched.append(url)
+                return md
+
+        dep = cd.Dependency("androidx.activity:activity", {
+            "version_used": "1.12.0", "latest_stable": "1.13.0", "type": "google",
+        })
+        url, notes = cd.AndroidXAdapter(lang="es-419").notes_for(FakeFetcher(), dep, False)
+        self.assertEqual(fetched, ["https://developer.android.com/jetpack/androidx/releases/activity"])
+        self.assertTrue(url.endswith("?hl=es-419"))
+        self.assertEqual(notes[0].url, url)
+
+    # 1.2 — no se cachea un resultado vacío
+    def test_empty_result_not_cached(self):
+        dep = cd.Dependency("a:b", {"version_used": "1.0.0", "latest_stable": "2.0.0"})
+
+        class Router:
+            notes = []
+
+            def resolve(self, fetcher, entry, pre):
+                return {"source": "github" if self.notes else None,
+                        "source_url": None, "notes": self.notes}
+
+        router = Router()
+        with tempfile.TemporaryDirectory() as td:
+            cache = cd.Cache(td, opts_key="k")
+            cd.process_dependency(dep, None, router, cache, False, False, "m")
+            self.assertIsNone(cache.get(dep))
+            router.notes = [{"version": "2.0.0", "date": None, "url": None, "notes": "x"}]
+            cd.process_dependency(dep, None, router, cache, False, False, "m")
+            self.assertEqual(len(cache.get(dep)["versions"]), 1)
+
+    # 1.3 — el reemplazo no entra en apis ni en impact_seeds
+    def test_heuristic_separates_replacement(self):
+        for line, old, new in (
+            ("`OnBackPressedCallback` is now deprecated; use `NavigationEventHandler` instead.",
+             "OnBackPressedCallback", "NavigationEventHandler"),
+            ("`setFoo()` was removed, replaced by `configure()`.", "setFoo", "configure"),
+            ("Deprecated `OldThing` in favor of [`NewThing`](https://x/y).", "OldThing", "NewThing"),
+        ):
+            changes = cd.heuristic_changes([{"version": "1.0.0", "notes": line}])
+            self.assertEqual(changes[0]["apis"], [old], line)
+            self.assertEqual(changes[0]["replacement"], new, line)
+            seeds = cd.impact_seeds_from_changes(changes)
+            flat = seeds["types"] + seeds["functions"]
+            self.assertIn(old, flat)
+            self.assertNotIn(new, flat)
+
+    def test_feature_line_keeps_apis(self):
+        changes = cd.heuristic_changes([{"version": "1", "notes": "Added `Foo` so you can use `Bar` there."}])
+        self.assertEqual(changes[0]["kind"], "feature")
+        self.assertIsNone(changes[0]["replacement"])
+        self.assertEqual(changes[0]["apis"], ["Foo", "Bar"])
+
+    # 1.4 — se prioriza antes de cortar
+    def test_priority_before_cut(self):
+        versions = [
+            {"version": "2.0.0", "notes": "\n".join(f"Added new feature number {i}." for i in range(50))},
+            {"version": "1.5.0", "notes": "Removed `OldApi` from the library."},
+        ]
+        changes = cd.heuristic_changes(versions)
+        self.assertEqual(len(changes), 40)
+        self.assertEqual(changes[0]["kind"], "removal")
+
+        dep = cd.Dependency("a:b", {"version_used": "1.0.0", "latest_stable": "2.0.0"})
+        entry = cd.build_intel_entry(dep, {"versions": versions, "source": "github"})
+        self.assertEqual(entry["changes_dropped"], 11)
+        self.assertIn("OldApi", entry["impact_seeds"]["types"])
+        doc = cd.build_intel_document({"a:b": dep}, [dict(coordinate="a:b", versions=versions)],
+                                      summarize=False, scope="major", only=[], model="x")
+        self.assertEqual(doc["meta"]["totals"]["changes_dropped"], 11)
+
+    # 1.5 — 1.2 == 1.2.0
+    def test_in_range_equal_length_padding(self):
+        self.assertFalse(cd.in_range("1.2.0", current="1.2", target="1.3"))
+        self.assertTrue(cd.in_range("1.3.0", current="1.2", target="1.3"))
+        self.assertEqual(cd.versions_in_range(["1.3", "1.3.0"], "1.2", "1.3"), ["1.3.0"])
+        self.assertLess(cd.version_sort_key("1.0"), cd.version_sort_key("1.0.1"))
+
+    # 1.6 — members estructurados y más raíces de paquetes
+    def test_members_and_package_roots(self):
+        text = ("[`requestOfflineAccess`](https://developer.android.com/reference/kotlin/androidx/"
+                "activity/ComponentActivity) `AuthorizationRequest.Builder.requestOfflineAccess()` "
+                "https://square.github.io/okhttp/5.x/okhttp/reference/okhttp3/OkHttpClient "
+                "https://x/reference/kotlinx/coroutines/flow/Flow")
+        seeds = cd.extract_seeds(text)
+        self.assertIn("androidx.activity", seeds["packages"])
+        self.assertIn("okhttp3", seeds["packages"])
+        self.assertIn("kotlinx.coroutines.flow", seeds["packages"])
+        self.assertIn({"owner": "AuthorizationRequest.Builder", "name": "requestOfflineAccess"},
+                      seeds["members"])
+        self.assertNotIn("AuthorizationRequest.Builder.requestOfflineAccess", seeds["types"])
+
+        imp = cd.impact_seeds_from_changes([
+            {"kind": "removal", "apis": ["AuthorizationRequest.Builder.requestOfflineAccess"]},
+        ])
+        self.assertEqual(imp["functions"], ["requestOfflineAccess"])
+        self.assertEqual(imp["members"],
+                         [{"owner": "AuthorizationRequest.Builder", "name": "requestOfflineAccess"}])
+
+    # 2.1 — memo por URL en Fetcher, también entre hilos
+    def test_fetcher_memoizes_per_url(self):
+        import concurrent.futures
+        import threading
+        import time
+
+        fetcher = cd.Fetcher(use_crawl4ai=False)
+        calls = []
+        lock = threading.Lock()
+
+        def slow(url):
+            with lock:
+                calls.append(url)
+            time.sleep(0.05)
+            return [{"tag_name": "v1"}]
+
+        fetcher._get_json = slow
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            results = list(pool.map(fetcher.get_json, ["u1"] * 6 + ["u2"] * 2))
+        self.assertEqual(sorted(calls), ["u1", "u2"])
+        self.assertTrue(all(r == [{"tag_name": "v1"}] for r in results))
+
+    def test_user_agent_has_version(self):
+        import changelog_diff
+        ua = cd.Fetcher().session.headers["User-Agent"]
+        self.assertEqual(ua, f"deps-changelog-diff/{changelog_diff.__version__}")
+
+    # 3.1 — acepta el esquema status-2 de toml-deps-checker
+    def test_load_status_2(self):
+        data = {
+            "schema": "toml-deps-checker/status-2",
+            "meta": {"generated_at": "2026-10-04"},
+            "dependencies": {
+                "com.squareup.okhttp3:okhttp": {
+                    "version_used": "4.12.0", "latest_stable": "5.0.0",
+                    "type": "maven", "status_code": "major",
+                },
+            },
+        }
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        self.addCleanup(os.remove, path)
+        deps = cd.load_dependencies(path, include_all=True)
+        self.assertEqual([d.coordinate for d in deps], ["com.squareup.okhttp3:okhttp"])
+
+    # 5 — modelos de Bedrock y salida truncada
+    def test_bedrock_model_ids(self):
+        from changelog_diff.llm import bedrock_model_id
+        self.assertEqual(bedrock_model_id("claude-haiku-4-5-20251001"),
+                         "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        self.assertEqual(bedrock_model_id("claude-sonnet-5"), "us.anthropic.claude-sonnet-5")
+        self.assertEqual(bedrock_model_id("eu.anthropic.claude-opus-5-5"), "eu.anthropic.claude-opus-5-5")
+
+    def test_truncated_llm_output_returns_none(self):
+        from changelog_diff.llm import enrich_intel_with_llm
+        resp = MagicMock()
+        resp.stop_reason = "max_tokens"
+        client = MagicMock()
+        client.messages.parse.return_value = resp
+        self.assertIsNone(enrich_intel_with_llm("a:b", "1", "2", "notes", "m", client))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

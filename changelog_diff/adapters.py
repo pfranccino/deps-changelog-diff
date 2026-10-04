@@ -116,9 +116,10 @@ class AndroidXAdapter:
     def __init__(self, lang: str = "es-419"):
         self.lang = lang
 
-    def page_url(self, slug: str) -> str:
-        if self.lang and self.lang.lower() != "en":
-            return f"{ANDROIDX_RELEASES}/{slug}?hl={self.lang}"
+    def page_url(self, slug: str, lang: str | None = None) -> str:
+        lang = self.lang if lang is None else lang
+        if lang and lang.lower() != "en":
+            return f"{ANDROIDX_RELEASES}/{slug}?hl={lang}"
         return f"{ANDROIDX_RELEASES}/{slug}"
 
     def notes_for(
@@ -128,8 +129,11 @@ class AndroidXAdapter:
         slug = androidx_slug(entry.group_id)
         if not slug:
             return None
+        # The notes are always read in English: the heuristics (kinds,
+        # replacements, gates) only understand English. `lang` only changes
+        # the links shown to humans.
+        markdown = fetcher.get_rendered_markdown(self.page_url(slug, "en"))
         url = self.page_url(slug)
-        markdown = fetcher.get_rendered_markdown(url)
         if not markdown:
             return None
         sections = slice_markdown_by_version(markdown)
