@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deps-changelog-diff"
+dynamic = ["version"]
+description = "What changed between the dependency versions you use and the latest stable, from official release notes."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31.0"]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40.0", "pydantic>=2.0.0"]
+bedrock = ["anthropic[bedrock]>=0.40.0", "pydantic>=2.0.0", "boto3"]
+crawl = ["crawl4ai>=0.4.0"]
+test = ["pytest>=8", "anthropic>=0.40.0", "pydantic>=2.0.0"]
+
+[project.scripts]
+deps-changelog-diff = "changelog_diff.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/pfranccino/deps-changelog-diff"
+
+[tool.setuptools.dynamic]
+version = { attr = "changelog_diff.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["changelog_diff*"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
